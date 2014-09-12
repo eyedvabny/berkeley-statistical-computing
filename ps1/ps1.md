@@ -1,17 +1,6 @@
----
-title: 'Stat 243: Problem Set 1'
-author: "Eugene Yedvabny"
-date: "09/12/2014"
-output:
-  html_document:
-    highlight: tango
-    keep_md: yes
-  pdf_document:
-    highlight: tango
-    latex_engine: lualatex
-geometry: margin=1in
-documentclass: article
----
+# Stat 243: Problem Set 1
+Eugene Yedvabny  
+09/12/2014  
 
 ## Question 1
 
@@ -40,25 +29,34 @@ I am not going to be using the SCF VM since I already have a Fedora VM I use for
 
 Let's download the FEC campaign expenditure data in CSV format. The link was manually obtained from the [FEC website](http://www.fec.gov/data/CandidateSummary.do?format=html)
 
-```{r engine='bash',eval=FALSE}
+
+```bash
 wget http://www.fec.gov/data/CandidateSummary.do?format=csv -O CandidateSummary.csv
 ```
 
 I understand that we're not required to use Sed or Awk, but frankly, they are so much nicer than piped cut. So pardon the liberty of using both tools from the get-go. First priority is to do some cleanup (from 3-a-ii but might as well do them here). Thank you Chris for the Sed command. Also most of this came from Googling; I don't remember most of Sed/Awk/Grep syntax off the top of my head.
 
-```{r engine='bash',eval=FALSE}
+
+```bash
 sed -i -e '2,$s/\([^",]\),/\1/g' -e 's/[$"]//g' CandidateSummary.csv
 ```
 
 I know that __field 4 is the office designation__ and __field 7 is the party affiliation__ from looking at the [metadata](http://www.fec.gov/finance/disclosure/metadata/metadataforcandidatesummary.shtml). If that's not available the following code will return which column I would need to look at (still need to know the column names though).
 
-```{r engine='bash',comment=NA}
+
+```bash
 head -n 1 CandidateSummary.csv | sed 's/,/\n/g' | grep -n "^can_par_aff$\|^can_off$"
+```
+
+```
+4:can_off
+7:can_par_aff
 ```
 
 Looks like the columns are aligned as designed in the metadata. We can proceed with processing of candidates. The code below will separate the downloaded CSV by `,` and then populate the files with Senate Democrats and Republicans.
 
-```{r engine='bash'}
+
+```bash
 awk '
   BEGIN {
     FS = ","
@@ -75,15 +73,21 @@ awk '
 
 Let's check how many Dems and Reps ran for Senate in 2014:
 
-```{r engine='bash',comment=NA}
+
+```bash
 NUM_DEMS=$(head -n -1 dem_sens.csv | wc -l)
 NUM_REPS=$(head -n -1 rep_sens.csv | wc -l)
 echo "There are" $NUM_DEMS "democrats and" $NUM_REPS "republicans"
 ```
 
+```
+There are 92 democrats and 195 republicans
+```
+
 These are consistent with the numbers reported by the online tool, so it looks like the above command worked as intended. Now let's extract the total _individual_ contributions. The column we want is __#16__, `ind_con`.
 
-```{r engine='bash',comment=NA}
+
+```bash
 for party in {dem,rep}
 do
   if [ $party = "dem" ]
@@ -106,6 +110,24 @@ do
 done
 ```
 
+```
+Democratic Contributions
+                     Name State Contribution
+    MARKEY EDWARD JOHN MR    MA     14668778
+            BOOKER CORY A    NJ     14128197
+              HAGAN KAY R    NC     10456106
+ GRIMES ALISON  LUNDERGAN    KY     10290296
+       NUNN MARY MICHELLE    GA      8016437
+
+Republican Contributions
+                     Name State Contribution
+          MCCONNELL MITCH    KY      8991643
+              CORNYN JOHN    TX      6903804
+            COTTON THOMAS    AR      5558956
+          CASSIDY WILLIAM    LA      5186351
+      GRAHAM LINDSEY OLIN    SC      5104768
+```
+
 Bash code chunks break on in-line comments, so here's a brief description of above code:
 
 * For each party file
@@ -119,7 +141,8 @@ Bash code chunks break on in-line comments, so here's a brief description of abo
 
 The first step here is to download the two zip files and extract the necessary text files.
 
-```{r engine='bash',eval=FALSE}
+
+```bash
 wget ftp://ftp.fec.gov/FEC/2014/cn14.zip
 unzip cn14.zip
 wget ftp://ftp.fec.gov/FEC/2014/indiv14.zip
@@ -128,7 +151,8 @@ unzip indiv14.zip
 
 As it turns out, Bash functions do not carry over from chunk to chunk, so as a work-around I am going to write the functions to a file and then source them in later chunks when needed. A bit hacky but works.
 
-```{r engine='bash'}
+
+```bash
 cat << EOF > get_committee_id.sh
 get_committee_id() {
   
@@ -153,16 +177,23 @@ EOF
 
 The function takes last name and optional first name of a candidate and returns their Committee ID from the downloaded cn.txt. If the first name is provided, it has to come in quotations with the last name so it is read as a single argument. The function is saved into a file and can be sourced from future bash instances. The shell variables have to be escaped so cat doesn't try to fill them from the local environment. Knitr actually has a cat engine that can do the text saving, but it's not as transparent since the reader won't see which file is being written. For illustrative purposes, let's get the comittee ID for Mitch McConnell.
 
-```{r engine='bash',comment=NA}
+
+```bash
 source get_committee_id.sh
 
 echo "Without first name:" $(get_committee_id "mcconnell")
 echo "With first name:" $(get_committee_id "mcconnell, mitch")
 ```
 
+```
+Without first name: C00426130 C00193342
+With first name: C00193342
+```
+
 Now we can use the committee IDs to count the number of contributions. The FEC Committee ID can appear in Column 1 - Filer Identification Number - or Column 16 - Other Identification Number. We should only look at the former. Let's write a function to count the individual contributions.
 
-```{r engine='bash'}
+
+```bash
 cat << EOF > get_num_contributions.sh
 get_num_contributions() {
   
@@ -180,7 +211,8 @@ EOF
 
 The above function is again saved to a file. It will crash if the required internal function, get\_committee\_id, is not present. Not very safe, but I'd rather source the two files together than source one from the other. Let's see how many times Mitch McConnell got paid in 2013-2014
 
-```{r engine='bash', comment=NA}
+
+```bash
 source get_committee_id.sh
 source get_num_contributions.sh
 
@@ -194,13 +226,20 @@ echo "Mitch McConnell received $MC_TOT contributions, of them $MC_CA in Californ
 echo "Alison Grimes received $GR_TOT contributions, of them $GR_CA in California"
 ```
 
+```
+In 2013-2014 election year
+Mitch McConnell received 6751 contributions, of them 288 in California
+Alison Grimes received 6452 contributions, of them 1026 in California
+```
+
 Hmm, it seems California prefers Alison Grimes over Mitch McConnell, though the latter has more contributions in total.
 
 ### c)
 
 The bulk of the work is already complete as part of __b__ so we just need to loop through a list of names. I'm from Boston, so let's look at candidates for MA senate.
 
-```{r engine='bash',comment=NA}
+
+```bash
 source get_committee_id.sh
 source get_num_contributions.sh
 
@@ -213,6 +252,32 @@ do
 done < mass_sen_names.txt
 ```
 
+```
+In 2013-2014 election year, Senate candidates from Massachusetts received:
+      SULLIVAN, MICHAEL J:     319 donations
+         ROBINSON, JACK E:       4 donations
+          COAKLEY, MARTHA:       2 donations
+         LYNCH, STEPHEN F:    2499 donations
+             KHAZEI, ALAN:      12 donations
+           BROWN, SCOTT P:     359 donations
+        KENNEDY, JOSEPH L:       0 donations
+   MASSIE, ROBERT KINLOCH:       0 donations
+            WARREN, SETTI:      75 donations
+        WARREN, ELIZABETH:     808 donations
+            MONDESIR, ENO:       0 donations
+   MARKEY, EDWARD JOHN MR:   11017 donations
+            KERRY, JOHN F:     175 donations
+           GOMEZ, GABRIEL:    2965 donations
+             BIELAT, SEAN:       3 donations
+             WINSLOW, DAN:     377 donations
+            INMAN, J MARK:       1 donations
+     HEOS, RICHARD ALFRED:       1 donations
+              HERR, BRIAN:      61 donations
+   ADDIVINOLA, FRANK J JR:      51 donations
+            SKARIN, BRUCE:       1 donations
+ UNDERWOOD, ROBERT JOSEPH:       0 donations
+```
+
 ## Question 4
 
 The easiest solution for scraping the site would be to leverage wget in recursive mode:
@@ -223,14 +288,26 @@ wget -r -nd -A *.txt http://www1.ncdc.noaa.gov/pub/data/ghcn/daily/
 
 For some reason it keeps getting stuck on network requests, so parsing HTML was the next best solution.
 
-```{r engine='bash',eval=FALSE}
+
+```bash
 curl -s http://www1.ncdc.noaa.gov/pub/data/ghcn/daily/ | 
   grep -o -E 'href=.*\.txt"' | 
   cut -d '"' -f2 | 
   wget -B http://www1.ncdc.noaa.gov/pub/data/ghcn/daily/ -P noaa -nv -i -
 ```
-```{r engine='bash',comment=NA}
+
+```bash
 ls noaa
+```
+
+```
+ghcnd-countries.txt
+ghcnd-inventory.txt
+ghcnd-states.txt
+ghcnd-stations.txt
+ghcnd-version.txt
+readme.txt
+status.txt
 ```
 
 The above code gets the index html, parses out all .txt files, and then pipes that file list into wget for downloading. Wget is partially silenced to only report the file name. I am not actually certain why nothing is printed to the final PDF; the filenames do appear in my shell. Output of ls is provided for verification.
@@ -241,10 +318,16 @@ The above code gets the index html, parses out all .txt files, and then pipes th
 
 I've written this whole document in RMarkdown, but for the sake of completness:
 
-```{r fig.width=4}
+
+```r
 hist(LakeHuron)
+```
+
+![plot of chunk unnamed-chunk-15](./ps1_files/figure-html/unnamed-chunk-15.png) 
+
+```r
 lowHi <- c(which.min(LakeHuron), which.max(LakeHuron))
 yearExtrema <- attributes(LakeHuron)$tsp[1] - 1 + lowHi
 ```
 
-Above you can see the histogram of water level in Lake Huron between `r yearExtrema[2]` and `r yearExtrema[1]`
+Above you can see the histogram of water level in Lake Huron between 1876 and 1964
