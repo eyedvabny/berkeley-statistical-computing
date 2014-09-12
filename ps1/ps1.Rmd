@@ -1,19 +1,70 @@
 ---
 title: 'Stat 243: Problem Set 1'
 author: "Eugene Yedvabny"
-date: "09/10/2014"
+date: "09/12/2014"
 output:
   pdf_document:
     highlight: tango
+    latex_engine: lualatex
   html_document:
+    fig_caption: yes
     highlight: tango
     theme: journal
-latex_engine: lualatex
 geometry: margin=1in
 documentclass: article
 ---
 
+## Question 1
 
-```{r engine='bash',comment=NA,}
-ls -la
+I've filled out the class survey, but for the sake of completeness, here's a brief summary about me:
+
+* _Name_: Eugene Yedvabny
+
+* _Email_: eyedvabny@berkeley.edu
+
+* _Department_: Chemistry
+
+* _Program_: 3rd-year PhD, but leaving the program
+
+* _Stat Experience_: Brief, unfortunately. A 'baby stats' course in undergrad on probablity theory and statistics. Two graduate-level courses at Berkeley on Statistical Mechanics. Currently co-enrolled in Stat 215, Statistical Models. So I know my way around but am still very much a beginner.
+
+* _Programming Experience_: Fairly extensive. I have a minor in CS, mostly in systems programming. For research here I program in C, C++ and do a lot of analysis in Python (SciPy stack). I took the Johns Hopkins Coursera track on Data Science, and that's my level of exposure to R. I used to know Java but it's been a few years since I programmed in that.
+
+* _Reasons for taking the class_: I've decided to leave my research program in computational chemistry because I realized I really don't like it. So for my last semester at Berkeley I want to study up on mathematical/statistical topics that both interest me and might help me land a compelling job in industry.
+
+## Question 2
+
+I am not going to be using the SCF VM since I already have a Fedora VM I use for classes. But I've downloaded the SCF OVA and poked around: by default it's set to __1 processor__ with __1 GB of RAM__.
+
+## Question 3
+### a)
+
+Let's download the FEC campaign expenditure data in CSV format. The link was manually obtained from the [FEC website](http://www.fec.gov/data/CandidateSummary.do?format=html)
+
+```{r engine='bash',comment=NA}
+wget http://www.fec.gov/data/CandidateSummary.do?format=csv -O CandidateSummary.csv
 ```
+
+I understand that we're not required to use Sed or Awk, but frankly, they are so much nicer than piped cut. So pardon the liberty of using Awk from the get-go. The code below will separate the downloaded CSV by "," (quotes included as part of the separator), write the meta header into both files, and then populate the files with Senate Democrats and Republicans respectively.
+
+```{r engine='bash',comment=NA}
+awk 'BEGIN {
+      FS = "\",\""
+    }
+    { 
+      if(NR==1) {
+        print $0 > "dem_sens.csv";
+        print $0 > "rep_sens.csv";
+      }
+    }
+    {
+      if ($4 == "S") {
+        if ($7 == "DEM")
+          print $0 >> "dem_sens.csv";
+        else if ($7 == "REP")
+          print $0 >> "rep_sens.csv";
+      }
+    }' CandidateSummary.csv
+```
+
+The above 
