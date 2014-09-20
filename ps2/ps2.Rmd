@@ -12,6 +12,15 @@ output:
 geometry: margin=1in
 documentclass: article
 ---
+## Question 1
+
+The following code is very straighforward and god-awfully slow. For whichever reason, R's line-by-line reading of bz2 file is an oder of magnitude slower than Python's or compiled C++'s. The code reads in the file line-by-line and copies the line into the appropriate output if it matches the filtering column. The output filenames are taken from the values of the subsetting column.
+
+I tried to do error sanity checking to maintain robustness, but I mostly stuck to the defined interface from the Piazza description. E.g. subsetting and filtering columns will be provided as column indices, not names, and the zipped csv will be on disk. There is very little memory requirement, as the code reads one line at a time. But if we assume file I/O is the bottleneck, this line-by-line reading carries a steep price. I've tried chunked reads (100000 lines at a time), but they don't speed up things considerably while adding extra processing logic.
+
+In order to avoid too much IO with constant file writing, I open a new output file for every __unique__ key within the subsetting column. To my surprise the R lists act like hash-tables, so arbitrary strings can be used as persisten list keys. After all reading and writing is complete, I close all connections at once using the built-in closeAllConnections() function.
+
+In conclusion, file reads in R are frustratingly slow.
 
 ```{r engine='bash',comment=NA}
 cat ZipChomp.R
