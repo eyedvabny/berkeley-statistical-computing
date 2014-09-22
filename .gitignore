@@ -2,10 +2,14 @@
 .Rhistory
 
 # R data files from past sessions
-.Rdata
+.RData
 
 # RStudio files
 .Rproj.user
 
 # No point in commiting a generic RProj
 *.Rproj
+
+# Regular junk
+.DS_Store
+*.tar.gz
