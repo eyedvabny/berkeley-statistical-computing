@@ -2,6 +2,8 @@ library(XML)
 library(stringr)
 library(magrittr)
 
+## ---- ExtractSpeechContent ----
+
 # Loads in the page from the specified URL
 # Extracts the president's name, speech year, and text
 # Additionally counts the number of applause and laughter tags

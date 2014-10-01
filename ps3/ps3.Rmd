@@ -4,19 +4,54 @@ author: "Eugene Yedvabny"
 date: "September 30, 2014"
 output: pdf_document
 ---
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r}
-summary(cars)
+```{r, cache=FALSE,echo=FALSE}
+knitr::read_chunk('CleanupSpeech.R')
+knitr::read_chunk('ExtractSpeechContent.R')
+knitr::read_chunk('ExtractSpeeches.R')
+knitr::read_chunk('GetSpeechStats.R')
 ```
 
-You can also embed plots, for example:
+The focus of this assignment was to create a readable and semi-efficient R code for scraping State of the Union speeches and analyzing their properties. I have chosen to rely on the `XML`, `stringR` and `dplyr` packages for the majority of my processing. The code is split up across several functions when the functionality was too much for a one-liner, but a lot of simple counting was just done in-line after the necessary lists were generated.
 
-```{r, echo=FALSE}
-plot(cars)
+The initial steps are to download the index and extract all of the links from the HTML table. The list contains 242 entries.
+```{r Setup}
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+The next step is to extract the body and the metadata. That is accomplished using the following function:
+```{r ExtractSpeechContent, eval=FALSE}
+```
+
+I apply the function onto the list of links to return a list of lists. Since `dplyr` only works on data frames, I transfrom the lists into a data frame. It's a bit messy and `sapply` can return a matrix directly, but turns out that matrix needs to be transposed to come into the right format. I opted for the casting method.
+```{r ExtractSpeeches}
+```
+
+The data frame ends up five columns: president's name, speech title, speech date, and speech body. The `XML` package conveniently removes all the HTML tags. Before the speech is cleaned up, I count the number of Laughter and Applause tags in its body.
+```{r TagCount}
+```
+
+The following function will take in the raw speech body and run it through `str_replace_all` to remove dangerous periods and add new-line markers.
+```{r CleanupSpeech, eval=FALSE}
+```
+
+The function is applied using `mutate` so that the result is appended to the data frame.
+```{r CleanUp}
+```
+
+The splitting into sentences and words doesn't really require its own function since `str_split` is already vectorized. Data frames can't handle lists of lists, so the words and sentences are kept as their own entities. Once they are generated I append the counts of sentences and words to the main data frame.
+```{r SplitUp}
+```
+
+Now comes the fun part - mining the speech content for word frequencies. I wrote a separate function that takes in the speech body and return a list of counts for each of the patterns. When this function is applied on the bodies of all speeches the result is a 242 x 11 matrix (there are 11 patterns).
+```{r GetSpeechStats, eval=FALSE}
+```
+
+```{r GetStats}
+```
+
+With all the frequencies compiled, time to plot some interesting trends.
+```{r PlotStats, fig.show='hold'}
+```
+
+Unfortunately at this stage I ran out of time and could not complete the Democrat vs Republican comparison. But it should be fairly trivial by assigning the presidents to political parties and then using `group_by` to look at the trends.
+
+This concludes my foray into analyzing State of the Union speeches.
