@@ -1,0 +1,178 @@
+---
+title: 'Stat 243: Problem Set 4'
+author: "Eugene Yedvabny"
+date: "10/15/2014"
+output: pdf_document
+---
+
+```{r set_up, cache=FALSE, echo=FALSE}
+knitr::read_chunk('benchSubsetting.R')
+knitr::read_chunk('randomWalk.R')
+
+library(pryr,warn.conflicts=FALSE)
+library(dplyr,warn.conflicts=FALSE)
+library(ggplot2)
+library(microbenchmark)
+```
+
+## 1
+
+The appearance of the `3` over a `2` is due to lazy evaluation. The value for `x` is only evaluated when `x` is called by the `+` operator within `f1`. Since `x` assigns `y` as part of its evaluation block, lazy eval ensures that default `y=0` is overwritten and thus `x + y = 2 + 1 = 3`.
+
+## 2
+
+The answer to this question will assume that the time it takes to _create_ the index vector or the boolean vector is irrelevant. As such I am going to create vectors of varying sizes and types, as well as their indexing vectors, and only benchmark the subsetting operation itself. I've created the following helper function to generate a dataframe for the each length of the vector I want to subset.
+
+```{r benchSubsetting, eval=FALSE, echo=TRUE}
+```
+
+The __microbenchmark__ package executes each expression 100 times and returns the range of timings. Since there are often high-exec-time outliers, best metric to look at is the median of the timing distribution.
+
+```{r benchmark_subsetting}
+source("benchSubsetting.R")
+
+# Enough lengths to get a good plot going
+bench.data <- seq(0,10000,100) %>% lapply(benchSubsetting) %>% rbind_all
+
+ggplot(bench.data,aes(x=length, y=median.time, color=expr)) +
+  geom_line() +
+  scale_color_brewer(type="qual", palette=6, name="",
+                     breaks=c("strs.bools","nums.bools",
+                              "strs.ints","nums.ints"),
+                     labels=c("Character/Booleans","Numeric/Booleans",
+                              "Character/Indices","Numeric/Indices")) +
+  xlab("Vector Length") +
+  ylab("Median Execution Time (ns)") +
+  theme(legend.position = "bottom")
+```
+
+As is evident from the figure above, subsetting by index is _a lot_ faster than subsetting by boolean. The perfomance costs are linear with vector length and are slightly higher for character vectors than numeric vectors. Since numeric vectors are stored continuosly while character vectors are essentially arrays of pointers to individual strings, this likely yields the observed difference in subsetting time.
+
+The difference between numeric and character vectors, however, pales in comparison to the gap between index-subsetting and boolean-subsetting. I've generated indexing boolean vectors of the same size as the data vector, so recycling should not be a factor in the timing. The issue really comes down to the number of elements to scan. I've set the parameters to recall about 30% of a vector's elements. In the case of a 100-element data vector, index subsetting would pass in 30 indices and underlying code would know exactly which memory addresses to compile into the new vector. In the case of boolean values, an entire 100-element vector is passed in, and the underlying code has to scan it all to check which of the data elements should be returned. So while the boolean subsetting is _convenient_, as it allows the use of vectorized logic expressions to generate the keys, it scales very poorly with vector size.
+
+What's more telling is that this performance difference holds even when the number of passed-in elements and returned elements is the same for both methods. In the following example I am requesting all 1000 of the vector elements, in one instance by passing a 1000-entry logical vector of T, and in another a 1000-entry vector of indices.
+
+```{r benchmark_same_length}
+test.data <- runif(1000)
+test.bool <- rep(T,1000)
+test.ind <- c(1:1000)
+
+microbenchmark(
+  with.bool = test.data[test.bool],
+  with.ind = test.data[test.ind]
+)
+```
+Based off the median timing, indexing with booleans is six times slower than indexing with indices, regardless of the vector length or number of elements requested.
+
+## 3
+
+For the purposes of answering this question, I am going to rely on the `pryr` package as it makes checking memory locations a lot easier. The package is up on CRAN now, so I figure it is fair game. __dplyr__ also has convenience functions `location` and `changes` for tracking data frame memory addresses and they are a lot cleaner in presentation than `.Internal(inspect())`.
+
+```{r memory_consistency, results='asis'}
+# Let's start of by creating heterogeneous data
+strings <- replicate(100, paste(sample(letters, 10, replace = T), collapse=''))
+numbers <- runif(100)
+booleans <- sample(c(T,F),100,replace=T)
+factors <- factor(sample(c("one","two","three"),100,replace=T))
+raw.addr <- c(address(strings),address(numbers),address(booleans),address(factors))
+
+# Merge the data into a dataframe
+data.f <- data_frame(strings,numbers,booleans,factors)
+frame.addr <- location(data.f)[[2]]
+
+# Merge the data into a list
+data.l <- list(strings,numbers,booleans,factors)
+list.addr <- sapply(data.l,address)
+
+# We can verify that the data frame is indeed just
+# metadata over the underlying vectors
+addresses <- data_frame(raw = raw.addr, data.frame = frame.addr, list = list.addr)
+knitr::kable(addresses)
+```
+
+Ok, so far so good. The data frame and list are just metadata over the underlying vectors.
+
+```{r memory_consistency_2}
+# Metadata prior to the change
+location(data.f)
+
+# Change a value in one of the underlying vectors
+data.f[10,1]<-"Hello"
+
+location(data.f)
+```
+
+The modification has replaced the entire column of the data frame. The address of the data frame itself has changed too, but since a data frame is just a wrapper around lists, that's not a costly operation. The untouched columns have remained the same. Furthermore the change is local to the data-frame; the raw string vector and the list are still pointing into the same original location. Changing one of the two makes another copy and now the raw vector, the list, and the data frame all point in different locations.
+
+```{r memory_consistency_3}
+c(address(strings),address(data.f$strings),address(data.l[[1]]))
+strings[10] <- "Hello"
+c(address(strings),address(data.f$strings),address(data.l[[1]]))
+```
+
+R always makes a copy if the underlying data is referred from other locations. But now that we have three different string vectors, does the copying still take place?
+
+```{r memory_consistency_4}
+strings[11] <- "Goodbye"
+data.f$strings[11] <- "Goodbye"
+data.l[[1]][11]<-"Goodbye"
+c(address(strings),address(data.f$strings),address(data.l[[1]]))
+```
+
+It appears the answer is _yes_. Even though each object has their own version of the string vector, an element change results in an entirely new vector being created. The unmodified elements, however, remain the same across all three objects as they haven't been modified since creation.
+
+```{r memory_consistency_5}
+c(address(numbers),address(data.f$numbers),address(data.l[[2]]))
+numbers[2]<-10;
+data.f$numbers[2]<-10;
+data.l[[2]][2]<-10;
+c(address(numbers),address(data.f$numbers),address(data.l[[2]]))
+numbers[2]<-15;
+data.f$numbers[2]<-15;
+data.l[[2]][2]<-15;
+c(address(numbers),address(data.f$numbers),address(data.l[[2]]))
+```
+
+Same issue as before: even when only one pointer is accessing the vector, a new copy is still being made. I know for a fact that this should not be the case in newer versions of R, hence the following disclaimer.
+
+__Disclaimer__: I've ran these codes through RStudio and knitr, which are known to yield different results than raw R. Since I cannot verify 100% what's going in the background with these packages, I am going to default to Hadley Wickham's extensive explanation of R's memory management, available at http://adv-r.had.co.nz/memory.html.
+
+## 4
+
+I am still a bit confused on how to have the S3 object maintain a list of attributes, such as the starting point, but only pass back a single value. Right now the printing of the result is well-formatted, but the actual returned object has access to all atributes of the rw, including the raw path. In any case, the function is fully vectorized and accomplished the random-walk task as an S3 class
+
+```{r randomWalk,eval=FALSE}
+```
+
+The code below will run through all the requested features for the class `rw`.
+
+```{r random_walk}
+source("randomWalk.R")
+
+walker <- rw(1000,T)
+walker2 <- rw(1000,F)
+
+# First walker will only return the end
+# Second walker will print the fill path
+walker2
+head(walker)
+
+# Use ggplot2 path geom to chart out the walk
+plot(walker)
+
+# The origin is set to 0,0
+# Calling start() allows resetting it
+start(walker)
+start(walker) <- c(5,7)
+start(walker)
+
+# We can of course get random elements of the walk
+walker[10]
+walker[25]
+```
+
+## 5
+
+## 6
+
+
