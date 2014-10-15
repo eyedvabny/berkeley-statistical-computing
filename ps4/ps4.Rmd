@@ -8,6 +8,7 @@ output: pdf_document
 ```{r set_up, cache=FALSE, echo=FALSE}
 knitr::read_chunk('benchSubsetting.R')
 knitr::read_chunk('randomWalk.R')
+knitr::read_chunk('newMaxLikelihood.R')
 
 library(pryr,warn.conflicts=FALSE)
 library(dplyr,warn.conflicts=FALSE)
@@ -173,6 +174,138 @@ walker[25]
 
 ## 5
 
+The __pryr__ package again comes in very handy for this part of the assignment. I will be specifically relying on the `object_size` and `mem_used` functions to tell me just how much of the RAM the code is using up.
+
+```{r memory_usage}
+# Create the two variable arrays
+object_size(temp.v1 <- sample(seq(1,20,1),1e7,replace=T))
+object_size(temp.v2 <- sample(seq(1,20,1),1e7,replace=T))
+
+# Record the initial memory usage
+mem_used()
+
+# Load in the provided code
+source("fastCount.R")
+
+mem_change(counted <- fastcount(temp.v1,temp.v2))
+```
+
+The actual application of `fastCountOld` does not significantly use up more memory _post expecution_ since the intermediate objects are all discarded after computation. The big memory costs are in the intermediate arrays; every cast creates a copy, and every logical operation creates a new logical vector.
+
+The execution of `src` and `dummyFun` is negligible as that code is comiled down to C. I do not know the underlying optimizations behind the __inline__ package, but goign to assume that dummyFun operates with in-memory replacement rather than copying entire arrays. That leaves the code in `fastCountOld`.
+
+The inputs are 10-million element long numberic vectors. At 8 bytes/element, that translates to 80 million bytes, or ~80 Mb as predicted. At this point the function is not modifying them, so no new copies are created. `is.na()` then creates _new_ logical vectors with a T/F for each element. Booleans are stored in 4 bytes, so this new logical vector is ~ 40 Mb. Memory usage just spiked up by 80 Mb.
+
+The subsequent two lines are innocuous but very costly, memory wise. `nalineX|nalineY` is a new logical vector, so in addition to computation costs, now there are 40 extra Mb of memory used in subsetting. Once the call ends the memory is recycled, so the two instances of `nalineX|nalineY` don't actually contribute anything to mem usage in the long run. `yvar` and `xvar`, however, now need to be copied from their old versions since there are at least two references to them (in global env and in function's env) so in-memory replacement is not allowed. Combined lines 3&4 thus spike the memory usage by 160 Mb + 40 Mb of the intermediate logic vector.
+
+The logic negation on line 5 is another new vector, and now it's permanent for the duration of the function environment. Since the previous ORs are garbage collected, `useline` requires another recalculation. Final tally is 40 Mb for `useline` + 40 Mb for the intermediate logic vector. At this point the function has generated 280 Mb not including the garbage-collected temporaries.
+
+`tablex` and `tabley` are short numeric vector, so as mentioned in the question prompt, they are negligible compared to the large vectors. For that same reason lines 6,7,10, and 11 (the ones setting `tablex` and `tabley` and the ones accessing `xuse` and `xnames`) are negligible as well.
+
+The line that executes `dummyFun`, however, is very costly, Every array is cast with as.integer(), and since integers are only 4 bytes long, this downcasting results in a copy made for every array. `xvar`,`yvar` and `useline` are the large vectors, so this call creates three additional 40 Mb vectors, bringing the total to ~ 400 Mb.
+
+The last three lines starting with `rbind` operate on 21-element vectors, so while there is copying involved in subsetting tablex and tabley, this impact is negligible as well.
+
+Below is a copy-paste of `fastcount` contents with interleaved memory checks.
+
+```{r memory_usage_2, cache=FALSE}
+xvar <- temp.v1
+yvar <- temp.v2
+
+start_mem <- mem_used()
+
+nalineX <- is.na(xvar)
+nalineY <- is.na(yvar)
+
+mem_used() - start_mem
+
+xvar[nalineX | nalineY] <- 0
+yvar[nalineX | nalineY] <- 0
+
+mem_used() - start_mem
+
+useline <- !(nalineX | nalineY);
+
+mem_used() - start_mem
+
+tablex <- numeric(max(xvar)+1)
+tabley <- numeric(max(yvar)+1)
+
+mem_used() - start_mem
+
+stopifnot(length(xvar) == length(yvar))
+res <- dummyFun(
+  tablex = as.integer(tablex), tabley = as.integer(tabley),
+  as.integer(xvar), as.integer(yvar), as.integer(useline),
+  as.integer(length(xvar)))
+
+mem_used() - start_mem
+
+xuse <- which(res$tablex > 0)
+xnames <- xuse - 1
+resb <- rbind(res$tablex[xuse], res$tabley[xuse])
+colnames(resb) <- xnames
+
+mem_used() - start_mem
+```
+
+Since casting is so expensive and dummyFun takes in only integers, it makes sense to keep everything as an integer from the get-go. This creates an immediate copy of xvar and yvar but halves the memory for each one and doesn't require casting later down the line.
+
+```{r memory_usage_3, cache=FALSE}
+
+# This really should be the first check
+stopifnot(length(temp.v1) == length(temp.v2))
+
+start_mem <- mem_used()
+
+# Coerse both variables into integers early on
+xvar <- as.integer(temp.v1)
+yvar <- as.integer(temp.v2)
+
+mem_used() - start_mem
+
+# Multiplying two logical vectors yields an int vector
+# If we are using useline to select lines to process
+# There is technically no need to set the values to 0
+useline <- (!is.na(xvar)) * (!is.na(yvar))
+
+mem_used() - start_mem
+
+# Not exactly certain why we have different tables
+# If they end up different lengths, subsetting by 
+# xuse might break later on
+tablex <- integer(max(xvar) + 1)
+tabley <- integer(max(yvar) + 1)
+
+mem_used() - start_mem
+
+# Everything is already a conditioned integer, so can remove checks
+res <- dummyFun(tablex, tabley, xvar, yvar, useline, length(xvar))
+
+mem_used() - start_mem
+
+# The lower section was actually already pretty good
+# Use cbind instead since R is column major
+xuse <- which(tablex > 0)
+resb <- cbind((xuse-1),res$tablex[xuse],res$tabley[xuse])
+
+mem_used() - start_mem
+```
+
 ## 6
 
+First things first: let's benchmark how long this code takes to complete.
+
+```{r performance}
+microbenchmark(source("oldMaxLikelihood.R"),times=1)
+```
+
+Yikes, slow. Here's the new and improved version:
+
+```{r newMaxLikelihood,eval=FALSE}
+```
+
+```{r performance_2}
+microbenchmark(source("newMaxLikelihood.R"),times=1)
+```
 
