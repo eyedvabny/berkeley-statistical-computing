@@ -1,0 +1,95 @@
+---
+title: 'Stat 243: Problem Set 6'
+author: "Eugene Yedvabny"
+date: "11/03/2014"
+output: pdf_document
+---
+
+```{r, cache=FALSE, echo=FALSE}
+knitr::opts_chunk$set(eval=F)
+knitr::read_chunk('q1.R')
+knitr::read_chunk('q2_sql.R')
+knitr::read_chunk('q2_ff.R')
+knitr::read_chunk('q3_sql.R')
+knitr::read_chunk('q3_ff.R')
+```
+
+Since most of the code for this problem set was run off the EC2 instance, the following code is just a copy of the commands interspersed with descriptive comments.
+
+## 1
+
+There are 21 zipped CSV files containing the 1987-2008 Airline data. The combined tarball clocks in at 1.7 Gb. The following script was used to read the CSVs one by one into R, replace NAs in DeptDelay with `1000`, and append to the SQLite db.
+
+```{r Q1}
+```
+
+The processing took ~ 20 minutes and resulted in a __8.8 Gb__ database file.
+
+## 2
+
+_I unfortunately could not get the Spark cluster properly instantiated, so the following is done only for ff and SQL_
+
+The following code completes 2a-d for the SQL database:
+
+```{r Q2_SQL}
+```
+
+* Full dataset: __123,534,969 entries__
+* Filtering out bad delays leaves __121216293 entries__
+* Serial subsetting to SFO & OAK: __50.4 sec__ resulting in 3826011 rows
+* Serial calculation of the mean delay: __252.2 sec__ with 347 unique airports
+* Adding an index on departure airport: __252.3 sec__
+* Indexed subsetting: __15.2 sec__ for SFO+OAK, __148.4 sec__ for delays
+* Parallel calculation of the mean delay: __79.9 sec__ 
+
+Parallelization in this case is not spectacular- 2x the speed for 4x the computing power- so perhaps there is some bottlenecking around concurrent db access (since the averaging does happen on the SQL side).
+
+Something interesting that emerged from playing around with filtering: SQL views do not seem to cache the indices of the subset data. Post-indexing, selecting distinct origin airports from the entire dataset takes ~13s, but selecting distinct airports from the dataset with delay > -30 and < 720 takes 130 seconds. This is regardless of whether I use the view or explicitly write out "where ..." in the query. If storage is not a consideration, it would thus be faster to store the filtered table as its own entity rather than just a view to speed up access.
+
+The following code repeats all of the above, this time using the ff package. For some reason the EC2 instance was horridly slow when running from the home directory (the 100Gb /) so I moved all the files into `/mnt/airline` to speed things up a bit. So perhaps the timings are not completely comparable between this and SQL.
+
+```{r Q2_ff}
+```
+
+* Loading in the dataset: __100.2 sec__
+* Initial subsetting to remove bad delay times: __368.2 sec__
+* Extract OAK and SFO: __79.4 sec__
+* Calculate the mean delay: __19.8 min__
+
+In general the ff package runs a lot slower than the SQL queries. Not sure whether that's due to the optimizations of the SQLite db or limitation of EC disk and memory access. The `ff` package was slow even on my desktop running locally.
+
+## 3
+
+```{r Q3_SQL}
+```
+
+* Table creation: __614.5 seconds__. Would have parallelized this by airport had I known it would take this long. Although, system time was only at 130 sec, so it looks like there was some IO bottleneck somewhere.
+* Table merge and retrieval ran for over __15 minutes__ before I killed it. Playing with dbSendQuery showed that the command runs perfectly fine, but the comparators are taking a horrid amount of time. There is again something wonky with the IO- the CPU is running at only 4% and elapsed time is much larger than system or user time. Perhaps this is the same issue Chris ran in to with m3 vs c3. 
+
+```{r Q3_ff}
+```
+
+* I've reused the filtered dat from Q2, but included the filtering lines in the script in case it needs to be run stand-alone.
+* Creation of the num_delay took the same __~20 min__ as getting the mean since the functional signature is essentially the same, just using `length` instead of `mean`
+* I could not get the timing for the merge on EC2 as I ran out of mnt space to create the merged set. The copying aspect of the ff tables really adds up. The code runs fine on a smaller subset of data.
+
+## 4
+
+The datasets were exported and combined into one large CSV using the command provided by Chris in ps9:
+
+```{r, engine='bash'}
+for yr in {1987..2008}
+do
+  bunzip2 ${yr}.csv.bz2 -c | tail -n +2 >> AirlineDataAll.csv
+done
+```
+
+The resulting unzipped CSV is, as expected, 12 Gb. Subsetting it is trivially done with AWK:
+
+```{r, engine='bash'}
+time \
+awk -F "," '{if ($17 == "SFO" || $17 == "OAK") print $0}' \
+AirlineDataAll.csv > AirlineSubset.csv
+```
+
+This operation takes __242 seconds __, so we're not actually winning much _here_ by using SQL or ff.
