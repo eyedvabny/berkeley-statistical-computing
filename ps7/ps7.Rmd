@@ -35,8 +35,8 @@ library(microbenchmark)
 n <- 1000
 D <- diag(sample(1:9,n,replace=T)) # 10x10 diagonal random matrix
 X <- replicate(n,sample(1:9,n,replace=T)) # 10x10 dense random matrix
-summary(microbenchmark(DX <- D%*%X, unit='ms'))$median
-summary(microbenchmark(XD <- X%*%D, unit='ms'))$median
+summary(microbenchmark(DX <- D%*%X, unit='ms', times=3))$median
+summary(microbenchmark(XD <- X%*%D, unit='ms', times=3))$median
 ```
 In both cases these are $O(n^3)$ operations.
 
@@ -46,7 +46,7 @@ DX translates to multiplying every value in the nth _row_ of X by the nth diagon
 
 ```{r}
 # diag(D) returns a vector of diagonal elements
-summary(microbenchmark(DX_2 <- X * diag(D),unit='ms'))$median
+summary(microbenchmark(DX_2 <- X * diag(D), unit='ms', times=3))$median
 all.equal(DX_2,DX)
 ```
 
@@ -55,10 +55,82 @@ all.equal(DX_2,DX)
 XD is now a multiplication of every value in the nth _column_ of X by the nth diagonal element of D. Since R is column-major, matrix*vector calculations won't work by default here. The easiest solution is to transpose X, multiply by diag vector of D and transpose again. The multiplication is again $O(n^2)$ and transpose is technically 'free' (but clearly from the timing below compared to DX above, reordering the matrix takes significant time).
 
 ```{r}
-summary(microbenchmark(XD_2 <- t(t(X)*diag(D)),unit='ms'))$median
+summary(microbenchmark(XD_2 <- t(t(X)*diag(D)), unit='ms', times=3))$median
 all.equal(XD_2,XD)
 ```
 
 ## Q4
 
-## Q5
+### a
+
+The forward reduction of LU decomposition involves creating 0s below the diagonal of each columnn of A. There are (n-1) such 0s in the first column, (n-2) in the second column, etc until the (n-1)th column where there is one 0. Each 0 comes out from $A_{ij}-L_{ik}*A_{kj}$, where $L_{ik} = A_{ik}/A_{kk}$. Each zero of the reduced A thus requires (n-1) operations. The total flops are thus $$\sum^{n-1}_{k=1} (n-k)(n-k) = \frac{n^3}{3}+\frac{n^2}{2}+\frac{n}{6}$$
+
+Per the derivation in class, each steps of the Cholesky decomposition is more expensive, but there are a lot fewer steps: $\frac{n^3}{6} + O(n)$. The inclusion of $b\rightarrow b^*$ calculation is a matrix * vector calculation and we already have all the L elements from factorization above. There is one less dimension, so flops = $\sum^{n-1}_{k=0}n-k=\frac{n(n-1)}{2}=\frac{n^2}{2}+O(n)$
+
+### b
+
+Backward elimination is $\sum^{n-1}_{k=1}k=\frac{n(n+1)}{2}=\frac{n^2}{2}+O(n)$
+
+### c
+
+The additional dimension does not affect the decomposition, only the forward and backward eliminations. The calculation would have to be performed on every column of B, so the final flop cost is _p * the calculated values above_.
+
+### d
+
+The LU decomposition cost is $\frac{n^3}{3} + O(n^2)$ and yields U and components of L. Finding $A^{-1}$ is then a matter of applying backwards elimination (an $O(n^2)$ operation) n times. So we get $\frac{n^3}{3}+n*n^2\approx n^3$ 
+
+### e
+
+VB is just plain matrix multiplication and both matrices are dense, so the calculation is (# of mult per value in product)(number of values in product) = $n*n*p=n^2p$
+
+### f
+
+From __c__ we have cost $A^{-1}B=\frac{p*n^3}{3}+\frac{p*3*n^2}{2}+O(n)$
+
+From __e__ we have cost $A^{-1}B=n^3 + pn^2 + O(n^2)$
+
+Since the $n^3$ component is independent of p, the invert-and-multiply approach is more efficient if p > 3.
+
+### g
+
+```{r}
+test_decomp <- function(n,p){
+  A <- crossprod(matrix(rnorm(n^2), n))
+  B <- matrix(rnorm(n*p),n)
+  
+  # Using LU
+  m1 <- summary(microbenchmark({
+    S1 <- solve(A,B)
+  },unit='ms', times=3))$median
+  
+  # Using inversion
+  m2 <- summary(microbenchmark({
+    A_inv <- solve(A)
+    S2 <- A_inv %*% B
+  },unit='ms', times=3))$median
+  
+  # Using Cholesky
+  m3 <- summary(microbenchmark({
+    U <- chol(A)
+    S3 <- backsolve(U,B)
+  },unit='ms', times=3))$median
+  
+  print(sprintf("A: %d x %d, B: %d x %d",n,n,n,p))
+  print(sprintf("LU: %f, Inv: %f, Chol: %f ms",m1,m2,m3))
+  all.equal(S1,S2,S3)
+}
+
+test_decomp(100,1)
+test_decomp(100,100)
+test_decomp(100,3000)
+
+test_decomp(3000,1)
+test_decomp(3000,100)
+test_decomp(3000,3000)
+```
+
+Interestingly enough, the above timings suggest I am _waaaay_ off on my predictions. LU is always faster than invert+multiply, regardless of p. The Cholesky approach always wins the race and is, expectedly, 2x the speed of LU by virtue of having half of the operations.
+
+### h
+
+For many different Bs, LU decomposition would have to be done for each B, while $A^-1$ is a single expensive computation that can be substituted into many Bs. Matrix multiplication grows linearly with the number of columns of B. LU and Cholesky likewise grow linearly as the number of backward eliminations changes with each B. But bacward eliminations only operate on one half of the matrix, so the prefactor is smaller. Thus computing $(LU)^{-1}B$ is still probably going to be faster.
